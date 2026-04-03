@@ -39,7 +39,7 @@
 ### Install from source
 
 ```bash
-git clone https://github.com/yourname/olcli
+git clone https://github.com/OPTIC7409/olcli
 cd olcli
 pip install -e .
 ```
