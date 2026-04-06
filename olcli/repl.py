@@ -1,12 +1,21 @@
 """
 OLCLI REPL
 The main interactive read-eval-print loop.
+
+Key improvements over v1:
+  - YOLO mode  (/yolo): auto-approves all tools, no interruptions
+  - Non-blocking input: you can type your next prompt while the AI is still
+    running; it is queued and executed immediately after the current turn ends
+  - Compact tool output: tool calls/results are one-liners; use /expand N to
+    see full details for tool call #N
 """
 
 import os
 import sys
 import uuid
 import asyncio
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +26,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style as PTStyle
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.patch_stdout import patch_stdout
 
 from .config import OlcliConfig, AgentRegistry, GLOBAL_CONFIG_DIR
 from .client import OllamaClient, Session, ClientCallbacks
@@ -31,6 +41,7 @@ PT_STYLE = PTStyle.from_dict({
     "prompt":       "#00d7ff bold",
     "path":         "#888888",
     "model":        "#00ff87",
+    "yolo":         "#ff2222 bold",
 })
 
 
@@ -43,7 +54,7 @@ class REPL:
         self.ui = TerminalUI(config)
         self.tools = ToolRegistry(
             safe_mode=config.safe_mode,
-            auto_approve=config.auto_approve_tools,
+            auto_approve=config.auto_approve_tools or config.yolo_mode,
         )
         self.registry = AgentRegistry()
         self.registry.load_from_dirs()
@@ -92,10 +103,29 @@ class REPL:
             key_bindings=self._build_keybindings(),
         )
 
+        # ── Non-blocking input queue ──────────────────────────────────────────
+        # While the AI is processing, the user can still type. Inputs are
+        # collected here and drained one-by-one after each turn completes.
+        self._input_queue: deque[str] = deque()
+        self._busy = False           # True while AI is processing a turn
+        self._busy_lock = threading.Lock()
+
+    # ── YOLO helpers ─────────────────────────────────────────────────────────
+
+    def _sync_yolo(self):
+        """Sync YOLO mode into the tool registry and save config."""
+        if self.config.yolo_mode:
+            self.tools.safe_mode = False
+            self.tools.auto_approve = True
+        else:
+            self.tools.safe_mode = self.config.safe_mode
+            self.tools.auto_approve = self.config.auto_approve_tools
+        self.config.save()
+
+    # ── Completer / Keybindings ───────────────────────────────────────────────
+
     def _build_completer(self) -> WordCompleter:
-        slash_cmds = [
-            f"/{c.name}" for c in self.commands.list_unique()
-        ]
+        slash_cmds = [f"/{c.name}" for c in self.commands.list_unique()]
         agent_names = [f"/agents run {a.name}" for a in self.registry.list_all()]
         return WordCompleter(
             slash_cmds + agent_names,
@@ -115,10 +145,14 @@ class REPL:
     def _get_prompt(self) -> HTML:
         cwd = os.path.basename(os.getcwd()) or "/"
         model = self.config.model
+        yolo_tag = " <yolo>⚡YOLO</yolo>" if self.config.yolo_mode else ""
+        busy_tag = " <dim>(running…)</dim>" if self._busy else ""
         return HTML(
             f'<prompt>olcli</prompt>'
             f'<path> {cwd}</path>'
             f' <model>({model})</model>'
+            f'{yolo_tag}'
+            f'{busy_tag}'
             f'<prompt> ❯ </prompt>'
         )
 
@@ -143,6 +177,9 @@ class REPL:
         if self._streaming:
             self.ui.end_stream()
             self._streaming = False
+        # In YOLO mode, always approve silently
+        if self.config.yolo_mode:
+            return True
         return self.ui.print_tool_approval(tool_name, args)
 
     def _on_thinking(self, thinking: str):
@@ -176,7 +213,6 @@ class REPL:
 
         # Slash commands
         if user_input.startswith("/") or user_input.startswith("!"):
-            # Map ! prefix to /run
             if user_input.startswith("!"):
                 user_input = "/run " + user_input[1:]
             handled = self.commands.execute(self, user_input)
@@ -187,7 +223,10 @@ class REPL:
                 )
             return
 
-        # Regular chat
+        # Regular chat — mark busy so the prompt shows (running…)
+        with self._busy_lock:
+            self._busy = True
+
         self._streaming = False
         self.ui.print_assistant_header(self.session.model)
 
@@ -208,20 +247,61 @@ class REPL:
                 self._streaming = False
             self.ui.print_error(f"Error: {e}")
             return
+        finally:
+            with self._busy_lock:
+                self._busy = False
 
         # Finalize streaming
         if self._streaming:
             self.ui.end_stream()
             self._streaming = False
         elif response:
-            # Non-streaming: print the full response
             self.ui.print_response(response)
 
     # ── Main Loop ─────────────────────────────────────────────────────────────
 
+    async def _input_loop(self):
+        """
+        Continuously read user input with patch_stdout so Rich output doesn't
+        clobber the prompt_toolkit input line.  When the AI is busy the typed
+        text is queued; when idle it is processed immediately.
+        """
+        with patch_stdout():
+            while self.running:
+                try:
+                    user_input = await self._pt_session.prompt_async(
+                        self._get_prompt,
+                    )
+                except KeyboardInterrupt:
+                    self.ui.print_info("Use /exit to quit.")
+                    continue
+                except EOFError:
+                    self.ui.print_info("Goodbye!")
+                    self.running = False
+                    break
+
+                if not user_input.strip():
+                    continue
+
+                with self._busy_lock:
+                    busy = self._busy
+
+                if busy:
+                    # Queue the input for after the current turn
+                    self._input_queue.append(user_input)
+                    self.ui.print_info(
+                        f"[dim]Queued (AI is running): {user_input[:60]}[/]"
+                    )
+                else:
+                    self._process_input(user_input)
+                    # Drain any queued inputs
+                    while self._input_queue and self.running:
+                        next_input = self._input_queue.popleft()
+                        self.ui.print_info(f"[dim]Running queued: {next_input[:60]}[/]")
+                        self._process_input(next_input)
+
     async def run_async(self):
         """Async REPL loop."""
-        # Check connection
         self.ui.print_banner(self.config.model, self.config.host)
 
         if not self.client.check_connection():
@@ -230,19 +310,7 @@ class REPL:
                 "Make sure Ollama is running with: [bold]ollama serve[/]"
             )
 
-        while self.running:
-            try:
-                user_input = await self._pt_session.prompt_async(
-                    self._get_prompt,
-                )
-            except KeyboardInterrupt:
-                self.ui.print_info("Use /exit to quit.")
-                continue
-            except EOFError:
-                self.ui.print_info("Goodbye!")
-                break
-
-            self._process_input(user_input)
+        await self._input_loop()
 
     def run(self):
         """Synchronous entry point."""

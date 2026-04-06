@@ -1,6 +1,7 @@
 """
 OLCLI Terminal UI
 Rich-powered terminal interface with syntax highlighting, panels, and diff views.
+Compact tool output with optional expansion; YOLO mode indicator.
 """
 
 import os
@@ -45,6 +46,7 @@ OLCLI_THEME = Theme({
     "header":     "bold bright_white on dark_blue",
     "cmd":        "bold bright_yellow",
     "dim":        "dim",
+    "yolo":       "bold bright_red",
 })
 
 # Agent color map
@@ -57,6 +59,17 @@ AGENT_COLORS = {
     "shell": "cyan",
 }
 
+# Tools that are "write" operations — shown with a pencil icon
+WRITE_TOOLS = {"write_file", "edit_file", "delete_file", "move_file", "make_directory", "run_shell"}
+
+
+def _short_arg(val, max_len: int = 60) -> str:
+    """Return a short single-line representation of an argument value."""
+    s = str(val).replace("\n", "↵ ").strip()
+    if len(s) > max_len:
+        s = s[:max_len] + "…"
+    return s
+
 
 class TerminalUI:
     def __init__(self, config: OlcliConfig):
@@ -65,6 +78,10 @@ class TerminalUI:
         self._live: Optional[Live] = None
         self._streaming_text = ""
         self._spinner: Optional[Live] = None
+
+        # Collapsible tool log: list of (tool_name, args, result_or_None)
+        # Each entry is rendered as a compact one-liner; user can /expand N to see details.
+        self._tool_log: list[dict] = []
 
     # ── Banner ────────────────────────────────────────────────────────────────
 
@@ -102,6 +119,8 @@ class TerminalUI:
         label = f"[assistant]OLCLI[/]"
         if model:
             label += f" [dim]({model})[/]"
+        if self.config.yolo_mode:
+            label += " [yolo]⚡ YOLO[/]"
         self.console.print(f"\n{label}")
 
     # ── Streaming ─────────────────────────────────────────────────────────────
@@ -151,14 +170,94 @@ class TerminalUI:
         )
         self.console.print(panel)
 
-    # ── Tool Calls ────────────────────────────────────────────────────────────
+    # ── Tool Calls (compact) ──────────────────────────────────────────────────
 
     def print_tool_call(self, tool_name: str, args: dict):
+        """Print a compact one-line tool call indicator."""
         import json
+
+        # Build a short summary of the most important arg
+        summary = ""
+        if args:
+            # Pick the first meaningful arg value
+            for key in ("path", "command", "query", "pattern", "file_a", "content"):
+                if key in args:
+                    summary = _short_arg(args[key], 55)
+                    break
+            if not summary:
+                first_val = next(iter(args.values()), "")
+                summary = _short_arg(first_val, 55)
+
+        icon = "✏" if tool_name in WRITE_TOOLS else "⚙"
+        idx = len(self._tool_log)
+        self._tool_log.append({"tool": tool_name, "args": args, "result": None})
+
+        summary_part = f"  [dim]{summary}[/dim]" if summary else ""
+        self.console.print(
+            f" [bold yellow]{icon} {tool_name}[/bold yellow]{summary_part}"
+            f"  [dim](#{idx}  /expand {idx})[/dim]"
+        )
+
+    def print_tool_result(self, tool_name: str, result: ToolResult):
+        """Update the last tool log entry and print a compact result line."""
+        # Update log
+        if self._tool_log:
+            self._tool_log[-1]["result"] = result
+
+        if result.success:
+            icon = "✓"
+            color = "green"
+            preview = result.output.strip().replace("\n", " ")
+            if len(preview) > 70:
+                preview = preview[:70] + "…"
+            suffix = f"  [dim]{preview}[/dim]" if preview else ""
+        else:
+            icon = "✗"
+            color = "red"
+            err = (result.error or "failed").strip()
+            suffix = f"  [bold red]{err[:70]}[/bold red]"
+
+        self.console.print(
+            f"   [bold {color}]{icon} {tool_name}[/bold {color}]{suffix}"
+        )
+
+    def print_tool_approval(self, tool_name: str, args: dict) -> bool:
+        """Ask user to approve a tool call. Returns True if approved."""
+        import json
+        # Build compact summary
+        summary = ""
+        if args:
+            for key in ("path", "command", "query", "pattern", "content"):
+                if key in args:
+                    summary = _short_arg(args[key], 80)
+                    break
+            if not summary:
+                summary = _short_arg(next(iter(args.values()), ""), 80)
+
+        self.console.print()
+        self.console.print(
+            f"[warning]⚠ Approval:[/] [bold yellow]{tool_name}[/]  [dim]{summary}[/]  "
+            f"[dim](use /yolo to skip all approvals)[/]"
+        )
+        try:
+            answer = input("  Allow? [y/N/a=always] ").strip().lower()
+            return answer in ("y", "yes", "a", "always")
+        except (EOFError, KeyboardInterrupt):
+            return False
+
+    def print_tool_expand(self, idx: int):
+        """Print full details for a logged tool call."""
+        import json
+        if idx < 0 or idx >= len(self._tool_log):
+            self.console.print(f"[error]No tool call #{idx} in this session.[/]")
+            return
+
+        entry = self._tool_log[idx]
+        tool_name = entry["tool"]
+        args = entry["args"]
+        result: Optional[ToolResult] = entry["result"]
+
         args_str = json.dumps(args, indent=2) if args else "{}"
-        # Truncate long args
-        if len(args_str) > 300:
-            args_str = args_str[:300] + "\n  ..."
 
         table = Table.grid(padding=(0, 1))
         table.add_column(style="tool.name", width=14)
@@ -167,89 +266,49 @@ class TerminalUI:
         if args:
             for k, v in args.items():
                 v_str = str(v)
-                if len(v_str) > 120:
-                    v_str = v_str[:120] + "..."
+                if len(v_str) > 300:
+                    v_str = v_str[:300] + "..."
                 table.add_row(f"  {k}:", f"[dim]{v_str}[/]")
 
         self.console.print(
-            Panel(table, border_style="yellow", padding=(0, 1))
+            Panel(table, title=f"[dim]Tool #{idx} — {tool_name}[/]",
+                  border_style="yellow", padding=(0, 1))
         )
 
-    def print_tool_result(self, tool_name: str, result: ToolResult):
-        if result.success:
-            style = "tool.ok"
-            icon = "✓"
-            border = "green"
-        else:
-            style = "tool.err"
-            icon = "✗"
-            border = "red"
+        if result is not None:
+            output = result.output
+            if len(output) > 3000:
+                output = output[:3000] + "\n... (truncated)"
 
-        output = result.output
-        if len(output) > 2000:
-            output = output[:2000] + "\n... (truncated)"
+            if output.startswith("---") or output.startswith("+++"):
+                content = Syntax(output, "diff", theme=self.config.theme, line_numbers=False)
+            elif tool_name in ("run_shell",) and output:
+                content = Syntax(output, "bash", theme=self.config.theme, line_numbers=False)
+            else:
+                content = Text(output)
 
-        # Try to detect if output is code/diff
-        content: object
-        if output.startswith("---") or output.startswith("+++"):
-            content = Syntax(output, "diff", theme=self.config.theme, line_numbers=False)
-        elif tool_name in ("run_shell",) and output:
-            content = Syntax(output, "bash", theme=self.config.theme, line_numbers=False)
-        else:
-            content = Text(output)
-
-        title = f"[{style}]{icon} {tool_name}[/]"
-        if result.error:
-            title += f" [error]— {result.error}[/]"
-
-        self.console.print(
-            Panel(content, title=title, border_style=border, padding=(0, 1))
-        )
-
-    def print_tool_approval(self, tool_name: str, args: dict) -> bool:
-        """Ask user to approve a tool call. Returns True if approved."""
-        import json
-        self.console.print()
-        self.console.print(
-            Panel(
-                f"[warning]Tool [bold]{tool_name}[/bold] requires approval[/]\n"
-                f"[dim]{json.dumps(args, indent=2)[:400]}[/]",
-                border_style="yellow",
-                title="[warning]⚠ Approval Required[/]",
+            border = "green" if result.success else "red"
+            status = "[tool.ok]✓[/]" if result.success else "[tool.err]✗[/]"
+            self.console.print(
+                Panel(content, title=f"{status} Result", border_style=border, padding=(0, 1))
             )
-        )
-        try:
-            answer = input("  Allow? [y/N] ").strip().lower()
-            return answer in ("y", "yes")
-        except (EOFError, KeyboardInterrupt):
-            return False
 
     # ── Agent UI ──────────────────────────────────────────────────────────────
 
     def print_agent_start(self, agent_name: str, task: str, session_id: str):
         color = AGENT_COLORS.get(agent_name, "magenta")
+        # Compact one-liner for agent start
+        task_short = task[:80] + ("…" if len(task) > 80 else "")
         self.console.print(
-            Panel(
-                f"[bold {color}]Agent: {agent_name}[/]\n"
-                f"[agent.task]Task: {task[:200]}[/]\n"
-                f"[dim]Session: {session_id}[/]",
-                border_style=color,
-                title=f"[{color}]▶ Sub-Agent Started[/]",
-                padding=(0, 1),
-            )
+            f"[{color}]▶ agent:{agent_name}[/]  [dim]{task_short}[/]"
         )
 
     def print_agent_end(self, agent_name: str, result):
         color = AGENT_COLORS.get(agent_name, "magenta")
-        status = "[success]✓ Completed[/]" if result.success else "[error]✗ Failed[/]"
+        status = "[success]✓[/]" if result.success else "[error]✗[/]"
         self.console.print(
-            Panel(
-                f"{status} [bold {color}]{agent_name}[/] "
-                f"[dim]({result.duration:.1f}s, {result.tool_calls} tool calls)[/]",
-                border_style=color if result.success else "red",
-                title=f"[{color}]◀ Sub-Agent Done[/]",
-                padding=(0, 1),
-            )
+            f"[{color}]◀ agent:{agent_name}[/]  {status}  "
+            f"[dim]{result.duration:.1f}s · {result.tool_calls} tool calls[/]"
         )
 
     def print_agent_token(self, agent_name: str, token: str):

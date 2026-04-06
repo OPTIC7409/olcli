@@ -450,6 +450,40 @@ def cmd_approve(repl: "REPL", args: str):
     repl.ui.print_success(f"Auto-approve {state}.")
 
 
+def cmd_yolo(repl: "REPL", args: str):
+    """Toggle YOLO mode — auto-approves ALL tools, no interruptions."""
+    repl.config.yolo_mode = not repl.config.yolo_mode
+    repl._sync_yolo()
+    if repl.config.yolo_mode:
+        repl.ui.console.print(
+            "[bold bright_red]⚡ YOLO mode ON[/] — all tools auto-approved, no approval prompts."
+        )
+    else:
+        repl.ui.console.print(
+            "[success]✓ YOLO mode OFF[/] — normal approval behaviour restored."
+        )
+
+
+def cmd_expand(repl: "REPL", args: str):
+    """Show full details for a tool call by index (e.g. /expand 3)."""
+    args = args.strip()
+    if not args.isdigit():
+        # Show a summary list of all logged tool calls
+        log = repl.ui._tool_log
+        if not log:
+            repl.ui.print_info("No tool calls logged in this session yet.")
+            return
+        repl.ui.console.print("[dim]Tool call log (use /expand N for details):[/]")
+        for i, entry in enumerate(log):
+            result = entry.get("result")
+            status = "[tool.ok]✓[/]" if (result and result.success) else (
+                "[tool.err]✗[/]" if result else "[dim]…[/]"
+            )
+            repl.ui.console.print(f"  [dim]#{i}[/]  {status}  [bold yellow]{entry['tool']}[/]")
+        return
+    repl.ui.print_tool_expand(int(args))
+
+
 def cmd_status(repl: "REPL", args: str):
     """Check Ollama connection and model status."""
     repl.ui.start_spinner("Checking connection...")
@@ -571,6 +605,8 @@ def build_command_registry() -> CommandRegistry:
         Command("think", "Toggle thinking display", "/think", cmd_think, [], "/think"),
         Command("safe", "Toggle safe mode", "/safe", cmd_safe, [], "/safe"),
         Command("approve", "Toggle auto-approve tools", "/approve", cmd_approve, [], "/approve"),
+        Command("yolo", "Toggle YOLO mode (auto-approve all, no interruptions)", "/yolo", cmd_yolo, [], "/yolo"),
+        Command("expand", "Show full details for a tool call", "/expand [N]", cmd_expand, ["x"], "/expand 3"),
         Command("status", "Check Ollama connection", "/status", cmd_status, [], "/status"),
         Command("cd", "Change working directory", "/cd [path]", cmd_cd, [], "/cd ~/projects"),
         Command("pwd", "Print working directory", "/pwd", cmd_pwd, [], "/pwd"),

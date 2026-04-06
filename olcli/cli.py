@@ -66,6 +66,11 @@ Examples:
         help="Disable tool approval prompts (auto-approve all)",
     )
     parser.add_argument(
+        "--yolo",
+        action="store_true",
+        help="Enable YOLO mode: auto-approve all tools, no interruptions",
+    )
+    parser.add_argument(
         "--no-stream",
         action="store_true",
         help="Disable streaming responses",
@@ -111,6 +116,10 @@ def main():
         config.system_prompt = args.system
     if args.safe_off:
         config.auto_approve_tools = True
+    if args.yolo:
+        config.yolo_mode = True
+        config.auto_approve_tools = True
+        config.safe_mode = False
     if args.no_stream:
         config.stream = False
 
@@ -154,6 +163,8 @@ def main():
 
     # ── Interactive REPL ──────────────────────────────────────────────────────
     repl = REPL(config)
+    if args.yolo:
+        repl._sync_yolo()
     if args.no_tools:
         repl.tools._tools.clear()
         repl.tools._handlers.clear()

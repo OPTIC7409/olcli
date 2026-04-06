@@ -54,6 +54,7 @@ class OlcliConfig:
     max_tool_iterations: int = 20
     show_thinking: bool = True
     compact_mode: bool = False
+    yolo_mode: bool = False
     extra: dict = field(default_factory=dict)
 
     def save(self):
