@@ -2,10 +2,10 @@
 OLCLI REPL
 The main interactive read-eval-print loop.
 
-Key improvements over v1:
+Key features:
   - YOLO mode  (/yolo): auto-approves all tools, no interruptions
-  - Non-blocking input: you can type your next prompt while the AI is still
-    running; it is queued and executed immediately after the current turn ends
+  - Non-blocking input: type your next prompt while the AI is still running;
+    it is queued and executed immediately after the current turn ends
   - Compact tool output: tool calls/results are one-liners; use /expand N to
     see full details for tool call #N
 """
@@ -26,7 +26,6 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style as PTStyle
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.patch_stdout import patch_stdout
 
 from .config import OlcliConfig, AgentRegistry, GLOBAL_CONFIG_DIR
 from .client import OllamaClient, Session, ClientCallbacks
@@ -42,6 +41,7 @@ PT_STYLE = PTStyle.from_dict({
     "path":         "#888888",
     "model":        "#00ff87",
     "yolo":         "#ff2222 bold",
+    "dim":          "#666666",
 })
 
 
@@ -262,43 +262,53 @@ class REPL:
 
     async def _input_loop(self):
         """
-        Continuously read user input with patch_stdout so Rich output doesn't
-        clobber the prompt_toolkit input line.  When the AI is busy the typed
-        text is queued; when idle it is processed immediately.
+        Async REPL loop.
+
+        Each user input is dispatched to a thread-pool executor so the AI can
+        run without blocking the event loop.  This keeps prompt_toolkit's async
+        input responsive (the user can type while the AI is working) without
+        needing patch_stdout, which conflicts with Rich's Console on Windows and
+        causes raw ANSI escape codes to appear in the terminal.
         """
-        with patch_stdout():
-            while self.running:
-                try:
-                    user_input = await self._pt_session.prompt_async(
-                        self._get_prompt,
+        loop = asyncio.get_event_loop()
+
+        while self.running:
+            try:
+                user_input = await self._pt_session.prompt_async(
+                    self._get_prompt,
+                )
+            except KeyboardInterrupt:
+                self.ui.print_info("Use /exit to quit.")
+                continue
+            except EOFError:
+                self.ui.print_info("Goodbye!")
+                self.running = False
+                break
+
+            if not user_input.strip():
+                continue
+
+            with self._busy_lock:
+                busy = self._busy
+
+            if busy:
+                # Queue the input for after the current turn
+                self._input_queue.append(user_input)
+                self.ui.print_info(
+                    f"Queued (AI is running): {user_input[:60]}"
+                )
+            else:
+                # Run in a thread so the event loop stays free for input
+                await loop.run_in_executor(
+                    None, self._process_input, user_input
+                )
+                # Drain any queued inputs sequentially
+                while self._input_queue and self.running:
+                    next_input = self._input_queue.popleft()
+                    self.ui.print_info(f"Running queued: {next_input[:60]}")
+                    await loop.run_in_executor(
+                        None, self._process_input, next_input
                     )
-                except KeyboardInterrupt:
-                    self.ui.print_info("Use /exit to quit.")
-                    continue
-                except EOFError:
-                    self.ui.print_info("Goodbye!")
-                    self.running = False
-                    break
-
-                if not user_input.strip():
-                    continue
-
-                with self._busy_lock:
-                    busy = self._busy
-
-                if busy:
-                    # Queue the input for after the current turn
-                    self._input_queue.append(user_input)
-                    self.ui.print_info(
-                        f"[dim]Queued (AI is running): {user_input[:60]}[/]"
-                    )
-                else:
-                    self._process_input(user_input)
-                    # Drain any queued inputs
-                    while self._input_queue and self.running:
-                        next_input = self._input_queue.popleft()
-                        self.ui.print_info(f"[dim]Running queued: {next_input[:60]}[/]")
-                        self._process_input(next_input)
 
     async def run_async(self):
         """Async REPL loop."""
