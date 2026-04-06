@@ -55,7 +55,7 @@ class OlcliConfig:
     auto_approve_tools: bool = False
     safe_mode: bool = True
     theme: str = "monokai"
-    max_tool_iterations: int = 20
+    max_tool_iterations: int = 50
     show_thinking: bool = True
     compact_mode: bool = False
     yolo_mode: bool = False

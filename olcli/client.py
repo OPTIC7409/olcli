@@ -240,11 +240,14 @@ class OllamaClient:
                     tool_name=tool_name,
                 )
         else:
-            # Hit max iterations
-            final_response = (
-                f"[Reached maximum tool iterations ({max_iter}). "
-                "Last response may be incomplete.]"
+            # Hit max iterations — emit as a warning, not a fake response
+            msg = (
+                f"Reached the tool call limit for this turn ({max_iter} iterations). "
+                "The task may be incomplete. You can raise the limit with: "
+                "/config max_tool_iterations 50"
             )
+            if self.callbacks.on_error:
+                self.callbacks.on_error(msg)
 
         return final_response
 
