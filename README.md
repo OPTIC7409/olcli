@@ -25,6 +25,9 @@
 | **Thinking Display** | Shows model reasoning (for models that support it) |
 | **Session Management** | Save, load, compact, and export conversations |
 | **Safe Mode** | Approval prompts before destructive tool calls |
+| **YOLO Mode** | Auto-approve all tools with no interruptions (`/yolo` or `--yolo`) |
+| **Non-blocking Input** | Type your next prompt while the AI is still running — it queues and runs after |
+| **Compact Tool Output** | Tool calls shown as single-line summaries; use `/expand N` for full details |
 | **One-shot Mode** | Run a single prompt or agent task from the command line |
 
 ---
@@ -43,6 +46,17 @@ git clone https://github.com/OPTIC7409/olcli
 cd olcli
 pip install -e .
 ```
+
+### Updating after a `git pull`
+
+Because OLCLI is installed in editable mode (`pip install -e .`), you **must re-run the install** after pulling new commits so Python picks up the latest code:
+
+```bash
+git pull
+pip install -e .
+```
+
+> **Windows note:** Python caches compiled bytecode in `__pycache__` folders. If a new command isn't recognised after pulling, run `pip install -e .` again (or delete all `__pycache__` folders manually) to force Python to reload the updated source.
 
 ### Install dependencies only
 
@@ -127,6 +141,8 @@ olcli -m qwen2.5-coder:7b
 | `/tools` | List all available tools |
 | `/safe` | Toggle safe mode (approval prompts) |
 | `/approve` | Toggle auto-approve for tools |
+| `/yolo` | Toggle YOLO mode — auto-approve **all** tools, no interruptions |
+| `/expand [N]` | Show full details for tool call #N (or list all if no N given) |
 | `/think` | Toggle thinking display |
 
 ---
@@ -231,6 +247,7 @@ Config is stored at `~/.olcli/config.json`.
 | `stream` | `true` | Enable streaming |
 | `safe_mode` | `true` | Require approval for destructive tools |
 | `auto_approve_tools` | `false` | Skip all approval prompts |
+| `yolo_mode` | `false` | Auto-approve all tools (persisted) |
 | `show_thinking` | `true` | Show model thinking tokens |
 | `max_tool_iterations` | `20` | Max tool call loop iterations |
 | `theme` | `monokai` | Syntax highlighting theme |
@@ -263,6 +280,9 @@ olcli --no-tools
 
 # Disable approval prompts
 olcli --safe-off
+
+# YOLO mode: auto-approve all tools, no interruptions
+olcli --yolo
 ```
 
 ---
