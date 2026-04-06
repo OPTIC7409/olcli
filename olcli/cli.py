@@ -86,6 +86,12 @@ Examples:
         help="List available agents and exit",
     )
     parser.add_argument(
+        "--no-update",
+        action="store_true",
+        dest="no_update",
+        help="Skip the automatic update check on startup",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version="OLCLI 1.0.0",
@@ -103,6 +109,18 @@ def main():
     ensure_dirs()
     parser = build_parser()
     args = parser.parse_args()
+
+    # ── Auto-update ───────────────────────────────────────────────────────────
+    # Skip update check for non-interactive / one-shot modes to keep them fast.
+    # Also skip if the user passes --no-update.
+    _no_update = getattr(args, "no_update", False)
+    _oneshot = bool(args.prompt or args.task or args.list_models or args.list_agents or args.agent)
+    if not _no_update and not _oneshot:
+        try:
+            from .updater import check_and_update
+            check_and_update()  # restarts process if updated; returns False if already current
+        except Exception:
+            pass  # never let an update error crash the CLI
 
     # Load config
     config = OlcliConfig.load()
