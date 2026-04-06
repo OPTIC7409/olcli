@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from ..config import OlcliConfig, AgentDefinition, AgentRegistry
 from ..client import OllamaClient, Session, ClientCallbacks
-from ..tools.builtins import ToolRegistry
+from ..tools import ToolRegistry
 
 
 # ── Agent Run Result ──────────────────────────────────────────────────────────

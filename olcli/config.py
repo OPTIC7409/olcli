@@ -24,6 +24,10 @@ PROJECT_CONFIG_DIR = Path(".olcli")
 PROJECT_AGENTS_DIR = PROJECT_CONFIG_DIR / "agents"
 PROJECT_COMMANDS_DIR = PROJECT_CONFIG_DIR / "commands"
 
+# Built-in agents directory (package bundled)
+PACKAGE_DIR = Path(__file__).parent
+BUILTIN_AGENTS_DIR = PACKAGE_DIR / "agents"
+
 
 def ensure_dirs():
     """Create all required global directories."""
@@ -260,10 +264,15 @@ class AgentRegistry:
             self._agents[agent.name] = agent
 
     def load_from_dirs(self):
-        """Load user and project agents from disk."""
+        """Load user, project, and built-in agents from disk."""
         dirs = []
+        # Built-in agents from package (lowest priority)
+        if BUILTIN_AGENTS_DIR.exists():
+            dirs.append((BUILTIN_AGENTS_DIR, "builtin"))
+        # User global agents
         if GLOBAL_AGENTS_DIR.exists():
             dirs.append((GLOBAL_AGENTS_DIR, "user"))
+        # Project local agents (highest priority - can override)
         if PROJECT_AGENTS_DIR.exists():
             dirs.append((PROJECT_AGENTS_DIR, "project"))
 
@@ -272,6 +281,7 @@ class AgentRegistry:
                 try:
                     agent = AgentDefinition.from_markdown(md_file)
                     agent.scope = scope
+                    agent.source_file = str(md_file)
                     self._agents[agent.name] = agent
                 except Exception as e:
                     pass

@@ -29,7 +29,7 @@ from prompt_toolkit.key_binding import KeyBindings
 
 from .config import OlcliConfig, AgentRegistry, GLOBAL_CONFIG_DIR
 from .client import OllamaClient, Session, ClientCallbacks
-from .tools.builtins import ToolRegistry
+from .tools import ToolRegistry
 from .agents.orchestrator import AgentOrchestrator
 from .commands.registry import CommandRegistry, build_command_registry
 from .ui.terminal import TerminalUI

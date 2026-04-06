@@ -144,7 +144,7 @@ def main():
     # ── List models ───────────────────────────────────────────────────────────
     if args.list_models:
         from .client import OllamaClient
-        from .tools.builtins import ToolRegistry
+        from .tools import ToolRegistry
         from .ui.terminal import TerminalUI
         ui = TerminalUI(config)
         client = OllamaClient(config, ToolRegistry())
@@ -193,7 +193,7 @@ def _run_oneshot(config: OlcliConfig, prompt: str, no_tools: bool):
     """Run a single prompt and print the response."""
     import uuid
     from .client import OllamaClient, Session, ClientCallbacks
-    from .tools.builtins import ToolRegistry
+    from .tools import ToolRegistry
     from .ui.terminal import TerminalUI
 
     ui = TerminalUI(config)
@@ -240,7 +240,7 @@ def _run_oneshot(config: OlcliConfig, prompt: str, no_tools: bool):
 
 def _run_agent_oneshot(config: OlcliConfig, agent_name: str, task: str, no_tools: bool):
     """Run a specific agent on a task and print the result."""
-    from .tools.builtins import ToolRegistry
+    from .tools import ToolRegistry
     from .agents.orchestrator import AgentOrchestrator
     from .ui.terminal import TerminalUI
 

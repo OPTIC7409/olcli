@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import ollama as _ollama
 
 from .config import OlcliConfig
-from .tools.builtins import ToolRegistry, ToolResult
+from .tools import ToolRegistry, ToolResult
 
 
 # ── Message ───────────────────────────────────────────────────────────────────
